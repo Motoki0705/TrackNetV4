@@ -2,7 +2,12 @@ import os
 import cv2
 import re
 import pandas as pd
-
+from CreateLabel import create_labels_with_heatmap_optimized
+import torch
+from torch.utils.data import Dataset
+from PIL import Image
+from torchvision import transforms
+from torch.utils.data import DataLoader
 
 # 親ディレクトリ内のサブディレクトリを取得する関数
 def get_subdirectories(parent_directory):
@@ -64,36 +69,32 @@ def collect_dataset_image_and_label_paths(dataset_directory):
         
     return all_game_image_paths, all_game_label_paths
 
-def create_dataset(image_paths, label_paths, num_series):
+
+def create_dataset(image_paths, label_paths, num_series, sigma=5):
     dataset = []
     for game_idx, game_level in enumerate(image_paths):
         for clip_idx, clip_level in enumerate(game_level):
             label_path = label_paths[game_idx][clip_idx]
+            
             df = pd.read_csv(label_path[0])
+            heatmap_labels = create_labels_with_heatmap_optimized(df, sigma=sigma)
             
             for i in range(len(clip_level) - num_series + 1):
                 series_paths = clip_level[i:i + num_series]
-                file_name = os.path.basename(clip_level[i + num_series - 1])
-                label = df[df['file name'] == file_name][['visibility', 'x-coordinate', 'y-coordinate']]
+                label = heatmap_labels[i + num_series - 1]
                 dataset.append([series_paths, label])
     
     return dataset
 
-
-
-import torch
-from torch.utils.data import Dataset
-from PIL import Image
-import pandas as pd
-
+# PyTorch Datasetクラス
 class CustomDataset(Dataset):
-    def __init__(self, dataset, transform=None):
+    def __init__(self, dataset_generator, transform=None):
         """
         Args:
-            dataset (list): [[path_list, label_df], ...] の形式のデータセット。
+            dataset_generator (generator): データセットジェネレータ。
             transform (callable, optional): 画像に適用する変換処理。
         """
-        self.dataset = dataset
+        self.dataset = list(dataset_generator)
         self.transform = transform
 
     def __len__(self):
@@ -104,13 +105,10 @@ class CustomDataset(Dataset):
         """
         指定されたインデックスに基づき、データとラベルを返す。
         Returns:
-            images (torch.Tensor): 画像テンソル ([C, H, W]) を3つ結合したもの。
-            label (torch.Tensor): ラベル（座標など）。
+            images (torch.Tensor): 画像テンソル ([num_series * C, H, W])。
+            label (torch.Tensor): ラベルテンソル。
         """
-        # パスとラベルを取得
-        image_paths, label_df = self.dataset[idx]
-
-        # 画像を読み込み
+        image_paths, label = self.dataset[idx]
         images = []
         for path in image_paths:
             image = Image.open(path).convert("RGB")  # 画像をRGB形式で読み込む
@@ -118,40 +116,35 @@ class CustomDataset(Dataset):
                 image = self.transform(image)
             images.append(image)
         
-        # 画像を1つのテンソルに結合 ([3, C, H, W] → [C, H, W]の形状になる)
-        images = torch.stack(images)
-
-        # ラベル（DataFrameの値を取得）
-        label = label_df.iloc[0][['visibility', 'x-coordinate', 'y-coordinate']].to_numpy()
-        label = torch.tensor(label, dtype=torch.float32)
-
-        return images, label
+        # チャンネル方向に結合 ([num_series * C, H, W])
+        images = torch.cat(images, dim=0)
+        return images, torch.tensor(label)
 
 # メイン処理
 if __name__ == '__main__':
-    
     dataset_directory = r"C:\Users\kamim\Downloads\Dataset\Dataset"
+    num_series = 3  # シリーズ長
+
+    # 画像とラベルのパスを収集
     image_paths, label_paths = collect_dataset_image_and_label_paths(dataset_directory)
-    dataset = create_dataset(image_paths, label_paths, 3)
-    
-    # 使用例
-    from torchvision import transforms
 
     # 画像変換（リサイズと正規化）
     transform = transforms.Compose([
-        transforms.Resize((180, 360)),
+        transforms.Resize((360, 640)),
         transforms.ToTensor()
     ])
 
-    # カスタムデータセットを作成
-    custom_dataset = CustomDataset(dataset, transform=transform)
+    # データセットジェネレータを作成
+    dataset_generator = create_dataset(image_paths, label_paths, num_series, sigma=10)
 
-    # PyTorch DataLoaderを使用
-    from torch.utils.data import DataLoader
+    # PyTorch Datasetを作成
+    custom_dataset = CustomDataset(dataset_generator, transform=transform)
 
+    # DataLoaderの使用
     data_loader = DataLoader(custom_dataset, batch_size=8, shuffle=True)
+
     # データの確認
     for images, labels in data_loader:
-        print(images.shape)  # 出力: torch.Size([8, 3, 3, 180, 360])
-        print(labels.shape)  # 出力: torch.Size([8, 3])
+        print(images.shape)  # 出力: torch.Size([8, 9, 360, 640])
+        print(labels.shape)  # 出力: torch.Size([8, 360 * 640])
         break

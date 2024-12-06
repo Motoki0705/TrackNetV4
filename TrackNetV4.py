@@ -32,6 +32,7 @@ class CBAM(nn.Module):
 class ResidualDownSamplingBlock(nn.Module):
     def __init__(self, in_channels, out_channels, stride=1, use_cbam=False):
         super(ResidualDownSamplingBlock, self).__init__()
+        
         self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1)
         self.bn1 = nn.BatchNorm2d(out_channels)
         self.relu = nn.ReLU()
@@ -82,7 +83,7 @@ class UpsampleBlock(nn.Module):
  
 class TrackNetV4(nn.Module):
     def __init__(self, in_chanels, out_chanels, num_layers, buffer_size):
-        super(TrackNetv4, self).__init__()
+        super(TrackNetV4, self).__init__()
         self.out_chanels = out_chanels
         self.buffer_size = buffer_size
 
